@@ -1,0 +1,22 @@
+# Railway deployment manifest.
+#
+# Prereqs in the Railway project:
+#   1. Set WATERMARK_ADMIN_TOKEN  (Variables tab — generate with `openssl rand -hex 32`)
+#   2. (Recommended) Attach the Postgres plugin so DATABASE_URL is set
+#      automatically. The backend normalizes postgres:// → postgresql:// for
+#      SQLAlchemy 2.x.
+#   3. (Optional, if not using Postgres) Attach a Volume mounted at /data
+#      and set WATERMARK_DB_URL=sqlite:////data/watermark_mvp.db so the
+#      SQLite file survives deploys.
+#
+# Nixpacks auto-detects Python from pyproject.toml and installs deps with pip.
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python -m watermark_mvp.backend.run --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/v1/health"
+healthcheckTimeout = 30
+restartPolicyType = "always"
+restartPolicyMaxRetries = 3

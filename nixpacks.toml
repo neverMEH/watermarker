@@ -1,0 +1,23 @@
+# Nixpacks build configuration for Railway.
+#
+# Pillow needs system zlib / libjpeg / libtiff headers at build time when no
+# manylinux wheel is available for the runner's architecture. Nixpacks gives
+# us those via the Nix packages below. We also pre-install psycopg[binary]
+# so the Postgres plugin works out of the box.
+
+[phases.setup]
+nixPkgs = ["python312", "gcc"]
+# psycopg2-binary ships its own libpq, so no libpq-dev needed. Pillow's
+# binary wheel covers libjpeg/zlib too, but we keep the headers in case
+# Pillow falls back to a source build on an unusual arch.
+aptPkgs = ["libjpeg-dev", "zlib1g-dev"]
+
+[phases.install]
+cmds = [
+    "python -m venv /opt/venv",
+    ". /opt/venv/bin/activate && pip install --upgrade pip wheel setuptools",
+    ". /opt/venv/bin/activate && pip install -e .[postgres]",
+]
+
+[start]
+cmd = ". /opt/venv/bin/activate && python -m watermark_mvp.backend.run --host 0.0.0.0 --port $PORT"

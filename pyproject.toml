@@ -1,0 +1,34 @@
+[project]
+name = "watermark-mvp"
+version = "0.1.0"
+description = "Screen watermarking MVP — Phase 1 slice of BUILD_SPEC.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "sqlalchemy>=2.0",
+    "cryptography>=42.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# psycopg2-binary is what SQLAlchemy loads for `postgresql://` URLs by
+# default — keeps Railway DATABASE_URL working with no driver-prefix munging.
+# The binary wheel avoids needing libpq headers at install time.
+postgres = ["psycopg2-binary>=2.9"]
+
+[project.scripts]
+wm-agent = "watermark_mvp.agent.cli:main"
+wm-extract = "watermark_mvp.cli.extract:main"
+wm-backend = "watermark_mvp.backend.run:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["watermark_mvp*"]
