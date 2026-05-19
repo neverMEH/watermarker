@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   apiGet,
+  type Asset,
   type AuditEvent,
   type Device,
   type Extraction,
@@ -18,6 +19,7 @@ interface Counts {
   tenants: number;
   users: number;
   devices: number;
+  assets: number;
   sessions: number;
   extractions: number;
 }
@@ -30,10 +32,11 @@ export default function DashboardPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [tenants, users, devices, sessions, extractions, audit] = await Promise.all([
+        const [tenants, users, devices, assets, sessions, extractions, audit] = await Promise.all([
           apiGet<Tenant[]>("/v1/tenants"),
           apiGet<User[]>("/v1/users"),
           apiGet<Device[]>("/v1/devices"),
+          apiGet<Asset[]>("/v1/assets"),
           apiGet<SessionRow[]>("/v1/sessions"),
           apiGet<Extraction[]>("/v1/extractions"),
           apiGet<AuditEvent[]>("/v1/audit", { limit: "10" }),
@@ -42,6 +45,7 @@ export default function DashboardPage() {
           tenants: tenants.length,
           users: users.length,
           devices: devices.length,
+          assets: assets.length,
           sessions: sessions.length,
           extractions: extractions.length,
         });
@@ -67,11 +71,12 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
+        <Stat label="Assets" value={counts?.assets} href="/assets" />
         <Stat label="Tenants" value={counts?.tenants} href="/tenants" />
         <Stat label="Users" value={counts?.users} href="/users" />
         <Stat label="Devices" value={counts?.devices} href="/devices" />
-        <Stat label="Active sessions" value={counts?.sessions} href="/sessions" />
+        <Stat label="Sessions" value={counts?.sessions} href="/sessions" />
         <Stat label="Extractions" value={counts?.extractions} href="/investigator" />
       </div>
 

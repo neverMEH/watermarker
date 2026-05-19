@@ -139,6 +139,61 @@ export interface ExtractResp {
   time_window_end: string | null;
   failure_reason: string | null;
   audit_id: string | null;
+  session_kind: string | null;
+  asset_id: string | null;
+  asset_type: string | null;
+  asset_status: string | null;
+  asset_case_id: string | null;
+  asset_description: string | null;
+  asset_recipient_name: string | null;
+  asset_recipient_email: string | null;
+  asset_recipient_ref: string | null;
+  asset_created_at: string | null;
+}
+
+export interface Asset {
+  id: string;
+  tenant_id: string;
+  asset_type: string;
+  case_id: string | null;
+  description: string | null;
+  recipient_user_id: string | null;
+  recipient_name: string | null;
+  recipient_email: string | null;
+  recipient_ref: string | null;
+  issued_by_email: string | null;
+  token: number;
+  token_hex: string;
+  original_sha256: string;
+  original_mime: string;
+  original_w: number;
+  original_h: number;
+  status: string;
+  created_at: string;
+  revoked_at: string | null;
+  revoked_reason: string | null;
+}
+
+export function assetMarkedUrl(assetId: string): string {
+  return `${API_BASE}/v1/assets/${assetId}/marked`;
+}
+
+/** Fetch a binary asset with the admin bearer and trigger a browser download. */
+export async function downloadAssetMarked(assetId: string, filename: string): Promise<void> {
+  const tok = getAdminToken();
+  const res = await fetch(`${API_BASE}/v1/assets/${assetId}/marked`, {
+    headers: tok ? { Authorization: `Bearer ${tok}` } : undefined,
+  });
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`, null);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 export interface CreateTenantResp {
   tenant_id: string;

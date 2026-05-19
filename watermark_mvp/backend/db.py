@@ -21,6 +21,8 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -82,6 +84,51 @@ class Session_(Base):
     mac_key = Column(LargeBinary, nullable=False)
     issued_at = Column(DateTime(timezone=True), default=_now)
     expires_at = Column(DateTime(timezone=True), nullable=False)
+    # "screen" (rotating 5-min token used by the live agent) or "asset"
+    # (long-lived token bound to an issued artifact). Lets one table back
+    # both flows without separate schemas.
+    kind = Column(String, nullable=False, default="screen", index=True)
+
+
+class Asset(Base):
+    """One issued, watermarked artifact (ID card, SIM activation card,
+    document, etc.). Each asset has a long-lived session token whose MAC
+    binding lets the investigator console attribute leaked copies.
+    """
+    __tablename__ = "assets"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
+
+    # Asset metadata.
+    asset_type = Column(String, nullable=False, default="other", index=True)
+    case_id = Column(String, nullable=True, index=True)
+    description = Column(Text, nullable=True)
+
+    # Recipient — exactly one of these flows is populated. Internal recipients
+    # link to a User row; external recipients carry free-text identity fields.
+    recipient_user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    recipient_name = Column(String, nullable=True)
+    recipient_email = Column(String, nullable=True)
+    recipient_ref = Column(String, nullable=True)  # ICCID, employee no, etc.
+
+    # Who pressed the button.
+    issued_by_email = Column(String, nullable=True)
+
+    # Forensic binding to a session token.
+    token = Column(Integer, ForeignKey("sessions.token"), nullable=False, unique=True, index=True)
+
+    # Original image bytes — kept so we can re-render the marked version
+    # on demand (watermarking is deterministic given token + original).
+    original_bytes = Column(LargeBinary, nullable=False)
+    original_sha256 = Column(String, nullable=False, index=True)
+    original_mime = Column(String, nullable=False, default="image/png")
+    original_w = Column(Integer, nullable=False)
+    original_h = Column(Integer, nullable=False)
+
+    status = Column(String, nullable=False, default="active", index=True)
+    created_at = Column(DateTime(timezone=True), default=_now, index=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_reason = Column(Text, nullable=True)
 
 
 class AuditEvent(Base):
@@ -111,6 +158,24 @@ _ENGINE = None
 _SESSION_LOCAL = None
 
 
+def _apply_lightweight_migrations(engine) -> None:
+    """Add columns to pre-existing tables that `Base.metadata.create_all`
+    won't ALTER. Idempotent — safe to run on every startup.
+
+    Keep this trivial; the moment we need rename/drop/data-rewrite, switch
+    to Alembic.
+    """
+    insp = inspect(engine)
+    if "sessions" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("sessions")}
+        if "kind" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE sessions ADD COLUMN kind VARCHAR "
+                    "NOT NULL DEFAULT 'screen'"
+                ))
+
+
 def get_engine(url: Optional[str] = None):
     global _ENGINE, _SESSION_LOCAL
     if _ENGINE is None:
@@ -124,6 +189,7 @@ def get_engine(url: Optional[str] = None):
             kwargs["poolclass"] = StaticPool
         _ENGINE = create_engine(url, **kwargs)
         Base.metadata.create_all(_ENGINE)
+        _apply_lightweight_migrations(_ENGINE)
         _SESSION_LOCAL = sessionmaker(bind=_ENGINE, expire_on_commit=False, future=True)
     return _ENGINE
 

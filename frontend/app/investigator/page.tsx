@@ -213,30 +213,92 @@ export default function InvestigatorPage() {
                   </span>
                 </div>
                 {result.success ? (
-                  <dl className="grid grid-cols-[140px_1fr] gap-y-1">
-                    <Term>Token</Term>
-                    <Val mono>{result.token_hex}</Val>
-                    <Term>Tenant</Term>
-                    <Val mono>{result.tenant_id}</Val>
-                    <Term>User</Term>
-                    <Val>{result.user_email}</Val>
-                    <Term>Device</Term>
-                    <Val>{result.device_hostname}</Val>
-                    <Term>Issued at</Term>
-                    <Val>
-                      {result.time_window_start
-                        ? new Date(result.time_window_start).toLocaleString()
-                        : "—"}
-                    </Val>
-                    <Term>Expires</Term>
-                    <Val>
-                      {result.time_window_end
-                        ? new Date(result.time_window_end).toLocaleString()
-                        : "—"}
-                    </Val>
-                    <Term>Audit ID</Term>
-                    <Val mono>{result.audit_id}</Val>
-                  </dl>
+                  <div className="space-y-4">
+                    {result.session_kind === "asset" && (
+                      <div className="rounded-md border border-amber-300 bg-amber-50 p-3">
+                        <div className="mb-1 flex items-center gap-2">
+                          <Badge variant="default" className="font-mono">
+                            {result.asset_type ?? "asset"}
+                          </Badge>
+                          {result.asset_status === "revoked" && (
+                            <Badge variant="destructive">revoked</Badge>
+                          )}
+                          <span className="text-xs text-muted-foreground">
+                            Issued artifact
+                          </span>
+                        </div>
+                        <dl className="grid grid-cols-[120px_1fr] gap-y-1 text-sm">
+                          <Term>Recipient</Term>
+                          <Val>
+                            {result.asset_recipient_name ||
+                              result.asset_recipient_email ||
+                              "—"}
+                          </Val>
+                          {result.asset_recipient_email &&
+                            result.asset_recipient_name && (
+                              <>
+                                <Term>Email</Term>
+                                <Val>{result.asset_recipient_email}</Val>
+                              </>
+                            )}
+                          {result.asset_recipient_ref && (
+                            <>
+                              <Term>Reference</Term>
+                              <Val mono>{result.asset_recipient_ref}</Val>
+                            </>
+                          )}
+                          {result.asset_case_id && (
+                            <>
+                              <Term>Case ID</Term>
+                              <Val>{result.asset_case_id}</Val>
+                            </>
+                          )}
+                          {result.asset_description && (
+                            <>
+                              <Term>Description</Term>
+                              <Val>{result.asset_description}</Val>
+                            </>
+                          )}
+                          {result.asset_created_at && (
+                            <>
+                              <Term>Issued at</Term>
+                              <Val>
+                                {new Date(result.asset_created_at).toLocaleString()}
+                              </Val>
+                            </>
+                          )}
+                          <Term>Asset ID</Term>
+                          <Val mono>{result.asset_id}</Val>
+                        </dl>
+                      </div>
+                    )}
+                    <dl className="grid grid-cols-[140px_1fr] gap-y-1">
+                      <Term>Token</Term>
+                      <Val mono>{result.token_hex}</Val>
+                      <Term>Tenant</Term>
+                      <Val mono>{result.tenant_id}</Val>
+                      <Term>Session kind</Term>
+                      <Val mono>{result.session_kind ?? "—"}</Val>
+                      <Term>User</Term>
+                      <Val>{result.user_email}</Val>
+                      <Term>Device</Term>
+                      <Val>{result.device_hostname}</Val>
+                      <Term>Issued at</Term>
+                      <Val>
+                        {result.time_window_start
+                          ? new Date(result.time_window_start).toLocaleString()
+                          : "—"}
+                      </Val>
+                      <Term>Expires</Term>
+                      <Val>
+                        {result.time_window_end
+                          ? new Date(result.time_window_end).toLocaleString()
+                          : "—"}
+                      </Val>
+                      <Term>Audit ID</Term>
+                      <Val mono>{result.audit_id}</Val>
+                    </dl>
+                  </div>
                 ) : (
                   <p className="text-muted-foreground">{result.failure_reason}</p>
                 )}

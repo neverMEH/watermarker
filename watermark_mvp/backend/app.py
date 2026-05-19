@@ -28,6 +28,7 @@ from typing import Optional
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -43,6 +44,7 @@ from ..core import (
 )
 from . import db
 from .db import (
+    Asset,
     AuditEvent,
     Device,
     Extraction,
@@ -54,6 +56,9 @@ from .db import (
 
 ADMIN_TOKEN_ENV = "WATERMARK_ADMIN_TOKEN"
 DEFAULT_TOKEN_TTL_SECONDS = 5 * 60  # 5-minute rotation per spec §3.1
+# Asset-bound tokens never expire (forensic value depends on long-lived
+# verifiability); use a 100-year sentinel.
+ASSET_TOKEN_TTL_SECONDS = 100 * 365 * 24 * 60 * 60
 
 
 def get_admin_token() -> str:
@@ -152,6 +157,19 @@ class ExtractResp(BaseModel):
     time_window_end: Optional[dt.datetime] = None
     failure_reason: Optional[str] = None
     audit_id: Optional[str] = None
+    # Populated when the matched token is bound to an issued asset
+    # (kind == "asset"). Lets the investigator console show who an artifact
+    # was issued to without a second round-trip.
+    session_kind: Optional[str] = None
+    asset_id: Optional[str] = None
+    asset_type: Optional[str] = None
+    asset_status: Optional[str] = None
+    asset_case_id: Optional[str] = None
+    asset_description: Optional[str] = None
+    asset_recipient_name: Optional[str] = None
+    asset_recipient_email: Optional[str] = None
+    asset_recipient_ref: Optional[str] = None
+    asset_created_at: Optional[dt.datetime] = None
 
 
 class TenantOut(BaseModel):
@@ -211,6 +229,33 @@ class CreateUserReq(BaseModel):
     email: str
 
 
+class AssetOut(BaseModel):
+    id: str
+    tenant_id: str
+    asset_type: str
+    case_id: Optional[str] = None
+    description: Optional[str] = None
+    recipient_user_id: Optional[str] = None
+    recipient_name: Optional[str] = None
+    recipient_email: Optional[str] = None
+    recipient_ref: Optional[str] = None
+    issued_by_email: Optional[str] = None
+    token: int
+    token_hex: str
+    original_sha256: str
+    original_mime: str
+    original_w: int
+    original_h: int
+    status: str
+    created_at: dt.datetime
+    revoked_at: Optional[dt.datetime] = None
+    revoked_reason: Optional[str] = None
+
+
+class RevokeAssetReq(BaseModel):
+    reason: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -226,6 +271,57 @@ def _audit(s: Session, tenant_id: Optional[str], event_type: str, actor: Optiona
     s.add(evt)
     s.flush()
     return evt
+
+
+# Minimum image dimensions so the watermark grid (1248×384) plus its corner
+# anchor markers fit with breathing room. Smaller uploads get upscaled.
+_ASSET_MIN_W = symbols.WATERMARK_W + 32
+_ASSET_MIN_H = symbols.WATERMARK_H + 36
+
+
+def _watermark_png_bytes(orig_bytes: bytes, encoded_symbols: list[int]) -> tuple[bytes, int, int]:
+    """Decode bytes → RGB → apply overlay → re-encode as PNG. Upscales
+    images smaller than the watermark region (preserving aspect). Returns
+    (png_bytes, final_w, final_h)."""
+    pil = Image.open(io.BytesIO(orig_bytes)).convert("RGB")
+    W, H = pil.size
+    if W < _ASSET_MIN_W or H < _ASSET_MIN_H:
+        scale = max(_ASSET_MIN_W / W, _ASSET_MIN_H / H)
+        new_w = int(W * scale + 0.5)
+        new_h = int(H * scale + 0.5)
+        pil = pil.resize((new_w, new_h), Image.LANCZOS)
+        W, H = new_w, new_h
+    arr = np.array(pil)
+    overlay = symbols.build_overlay(encoded_symbols, W, H)
+    marked = symbols.apply_overlay(arr, overlay)
+    buf = io.BytesIO()
+    Image.fromarray(marked).save(buf, format="PNG")
+    return buf.getvalue(), W, H
+
+
+def _asset_to_out(a: Asset) -> "AssetOut":
+    return AssetOut(
+        id=a.id,
+        tenant_id=a.tenant_id,
+        asset_type=a.asset_type,
+        case_id=a.case_id,
+        description=a.description,
+        recipient_user_id=a.recipient_user_id,
+        recipient_name=a.recipient_name,
+        recipient_email=a.recipient_email,
+        recipient_ref=a.recipient_ref,
+        issued_by_email=a.issued_by_email,
+        token=a.token,
+        token_hex=f"0x{a.token:010x}",
+        original_sha256=a.original_sha256,
+        original_mime=a.original_mime,
+        original_w=a.original_w,
+        original_h=a.original_h,
+        status=a.status,
+        created_at=a.created_at,
+        revoked_at=a.revoked_at,
+        revoked_reason=a.revoked_reason,
+    )
 
 
 def create_app() -> FastAPI:
@@ -408,6 +504,22 @@ def create_app() -> FastAPI:
             resp.device_hostname = device.hostname if device else None
             resp.time_window_start = sess.issued_at
             resp.time_window_end = sess.expires_at
+            resp.session_kind = sess.kind
+            # If this token is bound to an issued asset, surface that
+            # context — it's the answer the investigator actually wants.
+            asset = s.execute(
+                select(Asset).where(Asset.token == result.token)
+            ).scalars().first()
+            if asset is not None:
+                resp.asset_id = asset.id
+                resp.asset_type = asset.asset_type
+                resp.asset_status = asset.status
+                resp.asset_case_id = asset.case_id
+                resp.asset_description = asset.description
+                resp.asset_recipient_name = asset.recipient_name
+                resp.asset_recipient_email = asset.recipient_email
+                resp.asset_recipient_ref = asset.recipient_ref
+                resp.asset_created_at = asset.created_at
         else:
             resp.failure_reason = (
                 "no Viterbi candidate verified MAC; image may not contain a "
@@ -549,6 +661,222 @@ def create_app() -> FastAPI:
             )
             for r in rows
         ]
+
+    # -----------------------------------------------------------------------
+    # Assets — long-lived watermarked artifacts (ID cards, SIM cards, docs)
+    # -----------------------------------------------------------------------
+    def _ensure_asset_issuer(s: Session, tenant: Tenant) -> tuple[User, Device]:
+        """Synthetic 'asset-issuer' user + device per tenant so the existing
+        sessions schema (which requires user_id and device_id FKs) accepts
+        long-lived asset tokens without needing a real enrolled device."""
+        ISSUER_EMAIL = "asset-issuer@unseen.local"
+        ISSUER_HOST = "asset-issuer"
+        user = s.execute(
+            select(User).where(User.tenant_id == tenant.id, User.email == ISSUER_EMAIL)
+        ).scalars().first()
+        if user is None:
+            user = User(tenant_id=tenant.id, email=ISSUER_EMAIL)
+            s.add(user)
+            s.flush()
+        device = s.execute(
+            select(Device).where(Device.tenant_id == tenant.id, Device.user_id == user.id,
+                                 Device.hostname == ISSUER_HOST)
+        ).scalars().first()
+        if device is None:
+            device = Device(
+                tenant_id=tenant.id, user_id=user.id, hostname=ISSUER_HOST,
+                os="server", enroll_secret=secrets.token_urlsafe(32),
+            )
+            s.add(device)
+            s.flush()
+        return user, device
+
+    @app.post("/v1/assets", response_model=AssetOut,
+              dependencies=[Depends(require_admin)])
+    def issue_asset(
+        tenant_id: str = Form(...),
+        asset_type: str = Form("other"),
+        case_id: Optional[str] = Form(None),
+        description: Optional[str] = Form(None),
+        recipient_user_id: Optional[str] = Form(None),
+        recipient_name: Optional[str] = Form(None),
+        recipient_email: Optional[str] = Form(None),
+        recipient_ref: Optional[str] = Form(None),
+        issued_by_email: Optional[str] = Form(None),
+        image: UploadFile = File(...),
+        s: Session = Depends(db_session),
+    ):
+        tenant = s.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(404, "tenant not found")
+
+        # Recipient validation: exactly one flow must be populated.
+        if recipient_user_id:
+            recip = s.get(User, recipient_user_id)
+            if recip is None or recip.tenant_id != tenant.id:
+                raise HTTPException(404, "recipient user not found in tenant")
+            recipient_name_eff = recipient_name or recip.email
+            recipient_email_eff = recipient_email or recip.email
+        else:
+            if not (recipient_name or recipient_ref or recipient_email):
+                raise HTTPException(
+                    400,
+                    "must provide either recipient_user_id or "
+                    "(recipient_name / recipient_email / recipient_ref)",
+                )
+            recipient_name_eff = recipient_name
+            recipient_email_eff = recipient_email
+
+        raw = image.file.read()
+        if not raw:
+            raise HTTPException(400, "empty image upload")
+        sha = hashlib.sha256(raw).hexdigest()
+        # Validate decodable + capture pre-resize dimensions
+        try:
+            probe = Image.open(io.BytesIO(raw)).convert("RGB")
+        except Exception as e:
+            raise HTTPException(400, f"unreadable image: {e}")
+        orig_w, orig_h = probe.size
+
+        issuer_user, issuer_device = _ensure_asset_issuer(s, tenant)
+        token = _issue_unique_token(s)
+        mac_key = derive_mac_key(
+            tenant.master_key, token,
+            user_id=issuer_user.id, device_id=issuer_device.id,
+        )
+        now = dt.datetime.now(dt.timezone.utc)
+        expires = now + dt.timedelta(seconds=ASSET_TOKEN_TTL_SECONDS)
+        sess = Session_(
+            token=token,
+            tenant_id=tenant.id,
+            user_id=issuer_user.id,
+            device_id=issuer_device.id,
+            mac_key=mac_key,
+            issued_at=now,
+            expires_at=expires,
+            kind="asset",
+        )
+        s.add(sess)
+
+        asset = Asset(
+            tenant_id=tenant.id,
+            asset_type=asset_type or "other",
+            case_id=case_id,
+            description=description,
+            recipient_user_id=recipient_user_id,
+            recipient_name=recipient_name_eff,
+            recipient_email=recipient_email_eff,
+            recipient_ref=recipient_ref,
+            issued_by_email=issued_by_email,
+            token=token,
+            original_bytes=raw,
+            original_sha256=sha,
+            original_mime=image.content_type or "image/png",
+            original_w=orig_w,
+            original_h=orig_h,
+            status="active",
+        )
+        s.add(asset)
+        s.flush()
+        _audit(
+            s, tenant.id, "asset.issued",
+            actor=issued_by_email or "admin",
+            target=asset.id,
+            payload={
+                "token": f"0x{token:010x}",
+                "asset_type": asset.asset_type,
+                "recipient_user_id": recipient_user_id,
+                "recipient_name": recipient_name_eff,
+                "recipient_ref": recipient_ref,
+                "case_id": case_id,
+                "sha256": sha,
+            },
+        )
+        s.commit()
+        return _asset_to_out(asset)
+
+    @app.get("/v1/assets", response_model=list[AssetOut],
+             dependencies=[Depends(require_admin)])
+    def list_assets(
+        tenant_id: Optional[str] = None,
+        recipient_user_id: Optional[str] = None,
+        case_id: Optional[str] = None,
+        asset_type: Optional[str] = None,
+        status_filter: Optional[str] = None,
+        limit: int = 200,
+        s: Session = Depends(db_session),
+    ):
+        q = select(Asset)
+        if tenant_id:
+            q = q.where(Asset.tenant_id == tenant_id)
+        if recipient_user_id:
+            q = q.where(Asset.recipient_user_id == recipient_user_id)
+        if case_id:
+            q = q.where(Asset.case_id == case_id)
+        if asset_type:
+            q = q.where(Asset.asset_type == asset_type)
+        if status_filter:
+            q = q.where(Asset.status == status_filter)
+        rows = s.execute(q.order_by(Asset.created_at.desc()).limit(limit)).scalars().all()
+        return [_asset_to_out(a) for a in rows]
+
+    @app.get("/v1/assets/{asset_id}", response_model=AssetOut,
+             dependencies=[Depends(require_admin)])
+    def get_asset(asset_id: str, s: Session = Depends(db_session)):
+        a = s.get(Asset, asset_id)
+        if a is None:
+            raise HTTPException(404, "asset not found")
+        return _asset_to_out(a)
+
+    @app.get("/v1/assets/{asset_id}/marked",
+             dependencies=[Depends(require_admin)])
+    def get_asset_marked(asset_id: str, s: Session = Depends(db_session)):
+        a = s.get(Asset, asset_id)
+        if a is None:
+            raise HTTPException(404, "asset not found")
+        sess = s.get(Session_, a.token)
+        if sess is None:
+            raise HTTPException(500, "session row missing for asset token")
+        # Re-derive encoded symbols deterministically from the token + MAC key
+        payload_bits = payload_mod.make_payload(a.token, sess.mac_key)
+        encoded = conv_code.encode(payload_bits)
+        png_bytes, _, _ = _watermark_png_bytes(a.original_bytes, encoded)
+        _audit(s, a.tenant_id, "asset.downloaded.marked", actor=None,
+               target=a.id, payload={"sha256": a.original_sha256})
+        s.commit()
+        return Response(content=png_bytes, media_type="image/png",
+                        headers={"Content-Disposition":
+                                 f'inline; filename="asset-{a.id}-marked.png"'})
+
+    @app.get("/v1/assets/{asset_id}/original",
+             dependencies=[Depends(require_admin)])
+    def get_asset_original(asset_id: str, s: Session = Depends(db_session)):
+        a = s.get(Asset, asset_id)
+        if a is None:
+            raise HTTPException(404, "asset not found")
+        _audit(s, a.tenant_id, "asset.downloaded.original", actor=None,
+               target=a.id, payload=None)
+        s.commit()
+        return Response(content=a.original_bytes, media_type=a.original_mime,
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="asset-{a.id}-original"'})
+
+    @app.post("/v1/assets/{asset_id}/revoke", response_model=AssetOut,
+              dependencies=[Depends(require_admin)])
+    def revoke_asset(asset_id: str, req: RevokeAssetReq,
+                     s: Session = Depends(db_session)):
+        a = s.get(Asset, asset_id)
+        if a is None:
+            raise HTTPException(404, "asset not found")
+        if a.status == "revoked":
+            return _asset_to_out(a)
+        a.status = "revoked"
+        a.revoked_at = dt.datetime.now(dt.timezone.utc)
+        a.revoked_reason = req.reason
+        _audit(s, a.tenant_id, "asset.revoked", actor=None,
+               target=a.id, payload={"reason": req.reason})
+        s.commit()
+        return _asset_to_out(a)
 
     @app.get("/v1/audit", response_model=list[AuditEventOut],
              dependencies=[Depends(require_admin)])

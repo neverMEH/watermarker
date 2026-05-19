@@ -8,6 +8,7 @@ import {
   Users,
   MonitorSmartphone,
   KeyRound,
+  IdCard,
   Search,
   ScrollText,
 } from "lucide-react";
@@ -16,11 +17,12 @@ import { LogoMark } from "@/components/logo";
 
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/assets", label: "Assets", icon: IdCard },
+  { href: "/investigator", label: "Investigator", icon: Search },
   { href: "/tenants", label: "Tenants", icon: Building2 },
   { href: "/users", label: "Users", icon: Users },
   { href: "/devices", label: "Devices", icon: MonitorSmartphone },
-  { href: "/sessions", label: "Watermarks", icon: KeyRound },
-  { href: "/investigator", label: "Investigator", icon: Search },
+  { href: "/sessions", label: "Screen sessions", icon: KeyRound },
   { href: "/audit", label: "Audit log", icon: ScrollText },
 ];
 
