@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { clearAdminToken, getAdminToken, setAdminToken } from "@/lib/auth";
 import { API_BASE } from "@/lib/api";
+import { LogoMark } from "@/components/logo";
 
 export function TokenGate({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
@@ -54,12 +55,18 @@ export function TokenGate({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
         <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Sign in</CardTitle>
-            <CardDescription>
-              Paste the <code className="font-mono text-xs">WATERMARK_ADMIN_TOKEN</code> from
-              your backend to access the console.
-            </CardDescription>
+          <CardHeader className="space-y-3">
+            <div className="flex items-center gap-2">
+              <LogoMark className="h-7 w-7" />
+              <span className="text-lg font-semibold tracking-tight">unseen</span>
+            </div>
+            <div className="space-y-1.5">
+              <CardTitle>Sign in</CardTitle>
+              <CardDescription>
+                Paste the <code className="font-mono text-xs">WATERMARK_ADMIN_TOKEN</code>{" "}
+                from your backend to access the console.
+              </CardDescription>
+            </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={submit} className="space-y-4">

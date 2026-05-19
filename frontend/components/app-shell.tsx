@@ -12,6 +12,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LogoMark } from "@/components/logo";
 
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -28,10 +29,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-60 shrink-0 border-r bg-muted/30 md:flex md:flex-col">
-        <div className="px-5 py-4 border-b">
-          <div className="font-semibold tracking-tight">Watermark</div>
-          <div className="text-xs text-muted-foreground">Forensic console</div>
-        </div>
+        <Link
+          href="/"
+          className="flex items-center gap-2 border-b px-5 py-4 hover:bg-background/40"
+        >
+          <LogoMark className="h-6 w-6" />
+          <div>
+            <div className="font-semibold tracking-tight leading-none">unseen</div>
+            <div className="mt-1 text-xs text-muted-foreground leading-none">
+              Forensic console
+            </div>
+          </div>
+        </Link>
         <nav className="flex-1 space-y-0.5 px-2 py-3">
           {nav.map((item) => {
             const Icon = item.icon;

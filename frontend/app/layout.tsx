@@ -4,8 +4,8 @@ import { TokenGate } from "@/components/token-gate";
 import { AppShell } from "@/components/app-shell";
 
 export const metadata: Metadata = {
-  title: "Watermark console",
-  description: "Forensic watermark management & investigator console",
+  title: "Unseen",
+  description: "Unseen — forensic watermark management & investigator console",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

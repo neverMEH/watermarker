@@ -229,7 +229,7 @@ def _audit(s: Session, tenant_id: Optional[str], event_type: str, actor: Optiona
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Watermark MVP", version="0.1.0")
+    app = FastAPI(title="Unseen API", version="0.1.0")
 
     # CORS — comma-separated origins via WATERMARK_CORS_ORIGINS, or "*" by default
     # so the prompt-and-store-token UI can talk to the API from any host.
