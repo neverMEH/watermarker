@@ -1,0 +1,29 @@
+# Railway deployment manifest for the Next.js frontend.
+#
+# How to deploy on Railway (one-time):
+#   1. In the same Railway project as the backend, click "New Service" →
+#      "GitHub Repo" → select this repo.
+#   2. In the new service's Settings → Source, set "Root Directory" to
+#      "frontend". Railway will then pick up THIS file instead of the
+#      backend's railway.toml.
+#   3. Under Variables, set:
+#         NEXT_PUBLIC_API_BASE_URL = https://<backend-service>.up.railway.app
+#      (no trailing slash). This is baked into the client bundle at build
+#      time — it MUST be set before the first build.
+#   4. Recommended: on the backend service, restrict
+#         WATERMARK_CORS_ORIGINS = https://<frontend-service>.up.railway.app
+#      (currently defaults to "*").
+#
+# Nixpacks auto-detects Next.js from package.json and runs
+#   npm ci  →  npm run build  →  npm run start
+# The start script honors $PORT (set automatically by Railway).
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "npm run start"
+healthcheckPath = "/"
+healthcheckTimeout = 30
+restartPolicyType = "always"
+restartPolicyMaxRetries = 3

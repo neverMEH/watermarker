@@ -1,0 +1,5 @@
+# Pin Node so Next.js builds reproducibly on Railway.
+# Nixpacks auto-runs npm ci → npm run build → npm run start.
+
+[phases.setup]
+nixPkgs = ["nodejs_20"]
