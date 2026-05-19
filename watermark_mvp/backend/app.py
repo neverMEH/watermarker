@@ -206,6 +206,11 @@ class AuditEventOut(BaseModel):
     ts: dt.datetime
 
 
+class CreateUserReq(BaseModel):
+    tenant_id: str
+    email: str
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -457,10 +462,6 @@ def create_app() -> FastAPI:
             UserOut(id=u.id, tenant_id=u.tenant_id, email=u.email, created_at=u.created_at)
             for u in rows
         ]
-
-    class CreateUserReq(BaseModel):
-        tenant_id: str
-        email: str
 
     @app.post("/v1/users", response_model=UserOut,
               dependencies=[Depends(require_admin)])
