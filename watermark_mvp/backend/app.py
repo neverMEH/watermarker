@@ -27,8 +27,10 @@ from typing import Optional
 
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core import (
@@ -152,6 +154,58 @@ class ExtractResp(BaseModel):
     audit_id: Optional[str] = None
 
 
+class TenantOut(BaseModel):
+    id: str
+    name: str
+    created_at: dt.datetime
+
+
+class UserOut(BaseModel):
+    id: str
+    tenant_id: str
+    email: str
+    created_at: dt.datetime
+
+
+class DeviceOut(BaseModel):
+    id: str
+    tenant_id: str
+    user_id: str
+    hostname: str
+    os: str
+    created_at: dt.datetime
+
+
+class SessionOut(BaseModel):
+    token: int
+    token_hex: str
+    tenant_id: str
+    user_id: str
+    device_id: str
+    issued_at: dt.datetime
+    expires_at: dt.datetime
+
+
+class ExtractionOut(BaseModel):
+    id: str
+    tenant_id: Optional[str] = None
+    investigator_email: str
+    case_id: str
+    image_sha256: str
+    result_summary: Optional[str] = None
+    ts: dt.datetime
+
+
+class AuditEventOut(BaseModel):
+    id: str
+    tenant_id: Optional[str] = None
+    event_type: str
+    actor: Optional[str] = None
+    target: Optional[str] = None
+    payload: Optional[str] = None
+    ts: dt.datetime
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -171,6 +225,21 @@ def _audit(s: Session, tenant_id: Optional[str], event_type: str, actor: Optiona
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Watermark MVP", version="0.1.0")
+
+    # CORS — comma-separated origins via WATERMARK_CORS_ORIGINS, or "*" by default
+    # so the prompt-and-store-token UI can talk to the API from any host.
+    cors_env = os.environ.get("WATERMARK_CORS_ORIGINS", "*").strip()
+    if cors_env == "*":
+        allow_origins = ["*"]
+    else:
+        allow_origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Eager-init DB so SQLite file is created on startup.
     db.get_engine()
@@ -364,5 +433,139 @@ def create_app() -> FastAPI:
         resp.audit_id = audit.id
         s.commit()
         return resp
+
+    # -----------------------------------------------------------------------
+    # Read endpoints (admin) — backing the management UI
+    # -----------------------------------------------------------------------
+    @app.get("/v1/tenants", response_model=list[TenantOut],
+             dependencies=[Depends(require_admin)])
+    def list_tenants(s: Session = Depends(db_session)):
+        rows = s.execute(select(Tenant).order_by(Tenant.created_at.desc())).scalars().all()
+        return [TenantOut(id=t.id, name=t.name, created_at=t.created_at) for t in rows]
+
+    @app.get("/v1/users", response_model=list[UserOut],
+             dependencies=[Depends(require_admin)])
+    def list_users(
+        tenant_id: Optional[str] = None,
+        s: Session = Depends(db_session),
+    ):
+        q = select(User)
+        if tenant_id:
+            q = q.where(User.tenant_id == tenant_id)
+        rows = s.execute(q.order_by(User.created_at.desc())).scalars().all()
+        return [
+            UserOut(id=u.id, tenant_id=u.tenant_id, email=u.email, created_at=u.created_at)
+            for u in rows
+        ]
+
+    class CreateUserReq(BaseModel):
+        tenant_id: str
+        email: str
+
+    @app.post("/v1/users", response_model=UserOut,
+              dependencies=[Depends(require_admin)])
+    def create_user(req: CreateUserReq, s: Session = Depends(db_session)):
+        tenant = s.get(Tenant, req.tenant_id)
+        if tenant is None:
+            raise HTTPException(404, "tenant not found")
+        user = User(tenant_id=tenant.id, email=req.email)
+        s.add(user)
+        s.flush()
+        _audit(s, tenant.id, "user.created", actor=req.email,
+               target=user.id, payload={"tenant_id": tenant.id})
+        s.commit()
+        return UserOut(id=user.id, tenant_id=user.tenant_id, email=user.email,
+                       created_at=user.created_at)
+
+    @app.get("/v1/devices", response_model=list[DeviceOut],
+             dependencies=[Depends(require_admin)])
+    def list_devices(
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        s: Session = Depends(db_session),
+    ):
+        q = select(Device)
+        if tenant_id:
+            q = q.where(Device.tenant_id == tenant_id)
+        if user_id:
+            q = q.where(Device.user_id == user_id)
+        rows = s.execute(q.order_by(Device.created_at.desc())).scalars().all()
+        return [
+            DeviceOut(
+                id=d.id, tenant_id=d.tenant_id, user_id=d.user_id,
+                hostname=d.hostname, os=d.os, created_at=d.created_at,
+            )
+            for d in rows
+        ]
+
+    @app.get("/v1/sessions", response_model=list[SessionOut],
+             dependencies=[Depends(require_admin)])
+    def list_sessions(
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        device_id: Optional[str] = None,
+        limit: int = 100,
+        s: Session = Depends(db_session),
+    ):
+        q = select(Session_)
+        if tenant_id:
+            q = q.where(Session_.tenant_id == tenant_id)
+        if user_id:
+            q = q.where(Session_.user_id == user_id)
+        if device_id:
+            q = q.where(Session_.device_id == device_id)
+        rows = s.execute(q.order_by(Session_.issued_at.desc()).limit(limit)).scalars().all()
+        return [
+            SessionOut(
+                token=r.token,
+                token_hex=f"0x{r.token:010x}",
+                tenant_id=r.tenant_id,
+                user_id=r.user_id,
+                device_id=r.device_id,
+                issued_at=r.issued_at,
+                expires_at=r.expires_at,
+            )
+            for r in rows
+        ]
+
+    @app.get("/v1/extractions", response_model=list[ExtractionOut],
+             dependencies=[Depends(require_admin)])
+    def list_extractions(
+        tenant_id: Optional[str] = None,
+        limit: int = 100,
+        s: Session = Depends(db_session),
+    ):
+        q = select(Extraction)
+        if tenant_id:
+            q = q.where(Extraction.tenant_id == tenant_id)
+        rows = s.execute(q.order_by(Extraction.ts.desc()).limit(limit)).scalars().all()
+        return [
+            ExtractionOut(
+                id=r.id, tenant_id=r.tenant_id,
+                investigator_email=r.investigator_email,
+                case_id=r.case_id, image_sha256=r.image_sha256,
+                result_summary=r.result_summary, ts=r.ts,
+            )
+            for r in rows
+        ]
+
+    @app.get("/v1/audit", response_model=list[AuditEventOut],
+             dependencies=[Depends(require_admin)])
+    def list_audit(
+        tenant_id: Optional[str] = None,
+        limit: int = 200,
+        s: Session = Depends(db_session),
+    ):
+        q = select(AuditEvent)
+        if tenant_id:
+            q = q.where(AuditEvent.tenant_id == tenant_id)
+        rows = s.execute(q.order_by(AuditEvent.ts.desc()).limit(limit)).scalars().all()
+        return [
+            AuditEventOut(
+                id=r.id, tenant_id=r.tenant_id, event_type=r.event_type,
+                actor=r.actor, target=r.target, payload=r.payload, ts=r.ts,
+            )
+            for r in rows
+        ]
 
     return app
